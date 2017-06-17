@@ -2,9 +2,11 @@
         <include file="$(find openni_launch)launch/openni.launch" />
 
 	<arg name="m" default="$(find sr_recognizer)data/models_2opt" doc="Models directory"  />
-	<arg name="t" default="$(find sr_recognizer)data/photo1.pcd" doc="Test file"  />
+	<arg name="t" default="" doc="Test file"  />
         <arg name="cfg" default="$(find sr_recognizer)/cfg" doc="Folder containing config files"/>
 	<arg name="recParam" default="2" doc="Parameter for Recognizer: (0)manual (1-3)auto "/>
+	<arg name="change" default="1" doc="Change Detection 0/1 (on/off) "/>
+        <arg name="init" default="1" doc="First Recognition call is used to identify the empty workspace (eg. empty table) "/>
 	<arg name="arg" default="-z 3.0 -c 5 -g 0.01" doc="Additional arguments as stated in the library. For help arg:=-h. "/>
 
 	<node pkg="sr_recognizer" type="recognizer_server" name="recognizer_server" output="screen">
@@ -12,6 +14,8 @@
 		<param name="test_file" value="$(arg t)" />
 		<param name="cfg" value="$(arg cfg)" />
 		<param name="recParam" value="$(arg recParam)" />
+		<param name="change" value="$(arg change)" />
+		<param name="init" value="$(arg init)" />
 		<param name="arg" value="$(arg arg)" />
 	</node>
 

@@ -21,6 +21,7 @@
 
 #include <v4r/io/filesystem.h>
 #include <v4r/apps/ObjectRecognizer.h>
+#include <v4r/apps/change_detection.h>
 
 typedef pcl::PointXYZRGB PointT;
 
@@ -35,9 +36,17 @@ private:
     sr_recognizer::RecognizerFeedback feedback_;
     sr_recognizer::RecognizerResult result_;
 
+    pcl::PointCloud<PointT>::Ptr inputCloudPtr;
+    pcl::PointCloud<PointT>::Ptr inputCloudPtr_old;
+    pcl::PointCloud<PointT>::Ptr inputCloudPtr_empty;
+    std::vector<typename v4r::ObjectHypothesis<PointT>::Ptr > ohs;
+    std::string cfg_path;
+
     pcl::PointCloud<PointT>::Ptr kinectCloudPtr;
     std::string topic_;
     bool KINECT_OK_;
+    int change;
+    int init_empty;
 
 public:
     explicit RecognizerROS(std::string name):
@@ -53,11 +62,14 @@ public:
 
     std::vector<std::string> arguments;
     boost::shared_ptr<v4r::apps::ObjectRecognizer<PointT>> rec;
+    boost::shared_ptr<v4r::apps::ObjectRecognizerParameter> param;
+    boost::shared_ptr<v4r::apps::ChangeDetector<PointT>> detector;
 
     void checkCloudArrive(const sensor_msgs::PointCloud2::ConstPtr& msg);
     bool checkKinect();
     bool initialize();
     void recognize_cb(const sr_recognizer::RecognizerGoalConstPtr &goal);
+    typename pcl::PointCloud<PointT>::Ptr getScene();
 };
 
 #endif  // RECOGNIZER_RECOGNIZER_ROS_H

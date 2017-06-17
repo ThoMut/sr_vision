@@ -28,6 +28,41 @@ bool RecognizerROS::checkKinect()
     return KINECT_OK_;
 }
 
+typename pcl::PointCloud<PointT>::Ptr
+RecognizerROS::getScene()
+{
+    //  if path in the launch file for test_file is set, Recognizer uses the .pcd file instead the Kinect
+    std::string test_file;
+    if (nh_.getParam ("recognizer_server/test_file", test_file )  && !test_file.empty())
+    {
+        pcl::PointCloud<PointT>::Ptr fileCloudPtr(new pcl::PointCloud<PointT>);
+        pcl::io::loadPCDFile(test_file, *fileCloudPtr);
+        return fileCloudPtr;
+    }
+    else
+    {
+        if (!nh_.getParam("topic", topic_ ))
+        {
+            topic_ = "/camera/depth_registered/points";
+        }
+        std::cout << "Trying to connect to camera on topic " <<
+                     topic_ << ". You can change the topic with param topic or " <<
+                     " test pcd files from a directory by specifying param directory. " << std::endl;
+
+        KINECT_OK_ = false;
+        if (checkKinect())
+        {
+            std::cout << "Camera (topic: " << topic_ << ") is up and running." << std::endl;
+        }
+        else
+        {
+            std::cerr << "Camera (topic: " << topic_ << ") is not working." << std::endl;
+            return kinectCloudPtr;
+        }
+        return kinectCloudPtr;
+    }
+}
+
 bool RecognizerROS::initialize()
 {
     std::string models_dir;
@@ -42,13 +77,23 @@ bool RecognizerROS::initialize()
         return false;
     }
 
-    std::string cfg_path;
+    cfg_path.empty();
     if(!nh_.getParam("recognizer_server/cfg", cfg_path) && !cfg_path.empty())
     {
         ROS_ERROR("Config files Folder is not set. Must be set with param \"cfg\"!");
         return false;
     }
 
+    if(!nh_.getParam("recognizer_server/change", change))
+    {
+        change = 0;
+    }
+
+    if(!nh_.getParam("recognizer_server/init", init_empty))
+    {
+        init_empty = 0;
+    }
+    
     int recognizer_param;
     if(!nh_.getParam("recognizer_server/recParam", recognizer_param))
     {
@@ -110,66 +155,73 @@ bool RecognizerROS::initialize()
        std::cout << std::endl;
     }
 
-    v4r::apps::ObjectRecognizerParameter param(cfg_path + "multipipeline_config.xml");
-    rec.reset(new v4r::apps::ObjectRecognizer<PointT>(param)); 
+    param.reset(new v4r::apps::ObjectRecognizerParameter(cfg_path + "multipipeline_config.xml"));
 
     //Additionally the point clouds of all recognized Objects get published.
     vis_pc_pub_ = nh_.advertise<sensor_msgs::PointCloud2>( "recognizer/recognized_objects", 1 );
+
+    //make first recognition during initialisation
+
+    inputCloudPtr.reset(new pcl::PointCloud<PointT>());
+    inputCloudPtr_old.reset(new pcl::PointCloud<PointT>());
+    inputCloudPtr_empty.reset(new pcl::PointCloud<PointT>());
+
+    if(init_empty == 1 ) {
+        inputCloudPtr_empty = getScene(); //receiving point cloud from kinect (or file)
+        ROS_INFO("Initialized the empty scene, no objects should be on the table now!");
+    }
 
     return true;
 }
 
 void RecognizerROS::recognize_cb(const sr_recognizer::RecognizerGoalConstPtr &goal)
 {
+    pcl::ScopeTime t("Recognition");
+
     static bool init = true;
 
     ROS_INFO("Executing");
     
-    pcl::PointCloud<PointT>::Ptr pRecognizedModels (new pcl::PointCloud<PointT>());
-    pcl::PointCloud<PointT>::Ptr inputCloudPtr(new pcl::PointCloud<PointT>());
-
-    //  if path in the launch file for test_file is set, Recognizer uses the .pcd file instead the Kinect
-    std::string test_file;
-    if (nh_.getParam ("recognizer_server/test_file", test_file )  && !test_file.empty())
-        pcl::io::loadPCDFile(test_file, *inputCloudPtr);
-    else
-    {
-        if (!nh_.getParam("topic", topic_ ))
-        {
-            topic_ = "/camera/depth_registered/points";
-        }
-        std::cout << "Trying to connect to camera on topic " <<
-                     topic_ << ". You can change the topic with param topic or " <<
-                     " test pcd files from a directory by specifying param directory. " << std::endl;
-
-        KINECT_OK_ = false;
-        if (checkKinect())
-        {
-            std::cout << "Camera (topic: " << topic_ << ") is up and running." << std::endl;
-        }
-        else
-        {
-            std::cerr << "Camera (topic: " << topic_ << ") is not working." << std::endl;
-            return;
-        }
-
-        inputCloudPtr = kinectCloudPtr;
-    }
+    inputCloudPtr_old = inputCloudPtr;
+    inputCloudPtr = getScene(); //receiving point cloud from kinect
 
     if(init) { //work around
+      rec.reset(new v4r::apps::ObjectRecognizer<PointT>(*param));
       rec->initialize(arguments);
+
+      detector.reset(new v4r::apps::ChangeDetector<PointT>());
+      detector->init(*param, rec);
+
+      inputCloudPtr_old->width = inputCloudPtr->width;
+      inputCloudPtr_old->height = inputCloudPtr->height;
+      inputCloudPtr_old->points.resize(inputCloudPtr->width * inputCloudPtr->height);
+
       init = false;
     }
 
-    std::cout << "Start Reocognition" << std::endl;
+     if(init_empty == 1 )
+        inputCloudPtr = detector->init_empty_scene(inputCloudPtr_empty, inputCloudPtr);
 
-    std::vector<typename v4r::ObjectHypothesis<PointT>::Ptr > ohs = rec->recognize(inputCloudPtr);
+     if(change == 1) 
+     {
+        ohs = detector->hypotheses_verification(ohs, inputCloudPtr_old, inputCloudPtr);
+        ROS_INFO("Change Detetion and Recognition finished");
+     }
+     else
+     {
+	ohs = rec->recognize(inputCloudPtr);
+        ROS_INFO("Recognition finished");
+     }
 
-    std::cout << "Finished Reocognition" << std::endl;
-    
+
+//      std::cout << "Initial Reocognition" << std::endl;
+//      ohs = rec->recognize(inputCloudPtr);
+//      std::cout << "Finished Initial Reocognition" << std::endl;
+
     result_.ids.clear();
     result_.transforms.clear();
     result_.model_cloud.clear();
+    pcl::PointCloud<PointT>::Ptr pRecognizedModels (new pcl::PointCloud<PointT>());
 
     for (size_t m_id = 0; m_id < ohs.size(); m_id++)
     {
@@ -216,6 +268,7 @@ void RecognizerROS::recognize_cb(const sr_recognizer::RecognizerGoalConstPtr &go
 
     ROS_INFO("%s: Succeeded", action_name_.c_str());
     as_.setSucceeded(result_);
+    std::cout << "Recognition took " <<  t.getTime() << "ms" << std::endl;
 }  //  end recognizer_cb
 
 int main(int argc, char** argv)
